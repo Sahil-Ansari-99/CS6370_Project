@@ -2,8 +2,14 @@ from sentenceSegmentation import SentenceSegmentation
 from tokenization import Tokenization
 from inflectionReduction import InflectionReduction
 from stopwordRemoval import StopwordRemoval
-from informationRetrieval2 import InformationRetrieval
-from evaluation import Evaluation
+from informationRetrieval_vsm import InformationRetrieval
+from informationRetrieval2 import InformationRetrieval as InformationRetrieval_LSA
+from ir_1 import InformationRetrieval as InformationRetrieval_Base
+from informationRetrieval_base_lsa import InformationRetrieval as InformationRetrieval_Base_LSA
+from informationRetrieval_lsa_qe import InformationRetrieval as InformationRetrieval_LSA_QE
+from evaluation2 import Evaluation
+from scipy.stats import norm
+import numpy as np
 import time
 
 from sys import version_info
@@ -34,8 +40,11 @@ class SearchEngine:
 		self.stopwordRemover = StopwordRemoval()
 
 		self.informationRetriever = InformationRetrieval()
+		self.informationRetriever_lsa = InformationRetrieval_LSA()
+		self.informationRetriever_base = InformationRetrieval_Base()
+		self.informationRetriever_base_lsa = InformationRetrieval_Base_LSA()
+		self.informationRetriever_lsa_qe = InformationRetrieval_LSA_QE()
 		self.evaluator = Evaluation()
-
 
 	def segmentSentences(self, text):
 		"""
@@ -160,10 +169,34 @@ class SearchEngine:
 		processedDocs = self.preprocessDocs(docs)
 
 		# Build document index
-		self.informationRetriever.buildIndex(processedDocs, doc_ids)
+		cluster_sizes = [20, 50, 70, 100, 150, 200, 250]
+		ks = [50, 100, 200, 300, 500]
+		map_at_5 = []
+		map_at_10 = []
+		fscore_at_5 = []
+		fscore_at_10 = []
+		precisions_at_5 = []
+		recalls_at_5 = []
+		fscores_at_5 = []
+		dcgs_at_5 = []
+		maps_at_5 = []
+		precisions_at_5_lsa = []
+		recalls_at_5_lsa = []
+		fscores_at_5_lsa = []
+		dcgs_at_5_lsa = []
+		maps_at_5_lsa = []
+
+		self.informationRetriever_base.buildIndex(processedDocs, doc_ids)
+		# self.informationRetriever.buildIndex(processedDocs, doc_ids)
+		# self.informationRetriever_lsa.buildIndex(processedDocs, doc_ids)
+		# self.informationRetriever_base_lsa.buildIndex(processedDocs, doc_ids)
+		self.informationRetriever_lsa_qe.buildIndex(processedDocs, doc_ids)
 		# Rank the documents for each query
 		start_time = time.time()
-		doc_IDs_ordered = self.informationRetriever.rank(processedQueries)
+		# doc_IDs_ordered = self.informationRetriever.rank(processedQueries)
+		# doc_IDs_ordered_lsa = self.informationRetriever_lsa.rank(processedQueries)
+		doc_IDs_ordered_base = self.informationRetriever_base.rank(processedQueries)
+		doc_IDs_ordered_base_lsa = self.informationRetriever_lsa_qe.rank(processedQueries)
 		end_time = time.time()
 		# Read relevance judements
 		qrels = json.load(open(args.dataset + "cran_qrels.json", 'r'))[:]
@@ -171,42 +204,126 @@ class SearchEngine:
 		# Calculate precision, recall, f-score, MAP and nDCG for k = 1 to 10
 		precisions, recalls, fscores, MAPs, nDCGs = [], [], [], [], []
 		for k in range(1, 11):
-			precision = self.evaluator.meanPrecision(
-				doc_IDs_ordered, query_ids, qrels, k)
+			precision, precision_list = self.evaluator.meanPrecision(
+				doc_IDs_ordered_base, query_ids, qrels, k)
+			precision_lsa, precision_list_lsa = self.evaluator.meanPrecision(
+				doc_IDs_ordered_base_lsa, query_ids, qrels, k)
 			precisions.append(precision)
-			recall = self.evaluator.meanRecall(
-				doc_IDs_ordered, query_ids, qrels, k)
+			recall, recall_list = self.evaluator.meanRecall(
+				doc_IDs_ordered_base, query_ids, qrels, k)
+			recall_lsa, recall_list_lsa = self.evaluator.meanRecall(
+				doc_IDs_ordered_base_lsa, query_ids, qrels, k)
 			recalls.append(recall)
-			fscore = self.evaluator.meanFscore(
-				doc_IDs_ordered, query_ids, qrels, k)
+			fscore, fscore_list = self.evaluator.meanFscore(
+				doc_IDs_ordered_base, query_ids, qrels, k)
+			fscore_lsa, fscore_list_lsa = self.evaluator.meanFscore(
+				doc_IDs_ordered_base_lsa, query_ids, qrels, k)
 			fscores.append(fscore)
-			print("Precision, Recall and F-score @ " +  
-				str(k) + " : " + str(precision) + ", " + str(recall) + 
+			print("Precision, Recall and F-score @ " +
+				str(k) + " : " + str(precision) + ", " + str(recall) +
 				", " + str(fscore))
-			MAP = self.evaluator.meanAveragePrecision(
-				doc_IDs_ordered, query_ids, qrels, k)
+			MAP, maps_list = self.evaluator.meanAveragePrecision(
+				doc_IDs_ordered_base, query_ids, qrels, k)
+			MAP_lsa, maps_list_lsa = self.evaluator.meanAveragePrecision(
+				doc_IDs_ordered_base_lsa, query_ids, qrels, k)
 			MAPs.append(MAP)
-			nDCG = self.evaluator.meanNDCG(
-				doc_IDs_ordered, query_ids, qrels, k)
+			nDCG, dcg_list = self.evaluator.meanNDCG(
+				doc_IDs_ordered_base, query_ids, qrels, k)
+			nDCG_lsa, dcg_list_lsa = self.evaluator.meanNDCG(
+				doc_IDs_ordered_base_lsa, query_ids, qrels, k)
 			nDCGs.append(nDCG)
-			print("MAP, nDCG @ " +  
-				str(k) + " : " + str(MAP) + ", " + str(nDCG))
-		# Plot the metrics and save plot 
-		plt.plot(range(1, 11), precisions, label="Precision")
-		plt.plot(range(1, 11), recalls, label="Recall")
-		plt.plot(range(1, 11), fscores, label="F-Score")
-		plt.plot(range(1, 11), MAPs, label="MAP")
-		plt.plot(range(1, 11), nDCGs, label="nDCG")
-		plt.legend()
-		plt.title("Evaluation Metrics - Cranfield Dataset")
-		plt.xlabel("k")
-		print("-"*50)
-		print("PLOTTING")
-		print("-"*50)
-		plt.savefig(args.out_folder + "eval_plot_normal.png")
-		print('\n')
+			print("MAP, nDCG @ " + str(k) + " : " + str(MAP) + ", " + str(nDCG))
+			print("MAP, nDCG @ " + str(k) + " : " + str(MAP_lsa) + ", " + str(nDCG_lsa))
+			if k == 10:
+				precisions_at_5 = precision_list
+				recalls_at_5 = recall_list
+				fscores_at_5 = fscore_list
+				dcgs_at_5 = dcg_list
+				maps_at_5 = maps_list
+				precisions_at_5_lsa = precision_list_lsa
+				recalls_at_5_lsa = recall_list_lsa
+				fscores_at_5_lsa = fscore_list_lsa
+				dcgs_at_5_lsa = dcg_list_lsa
+				maps_at_5_lsa = maps_list_lsa
+		# fscore = self.evaluator.meanFscore(
+		# 	doc_IDs_ordered, query_ids, qrels, 5)
+		# fscore_at_5.append(fscore)
+		# fscore = self.evaluator.meanFscore(
+		# 	doc_IDs_ordered, query_ids, qrels, 10)
+		# fscore_at_10.append(fscore)
+		# MAP = self.evaluator.meanAveragePrecision(
+		# 	doc_IDs_ordered, query_ids, qrels, 5)
+		# map_at_5.append(MAP)
+		# MAP = self.evaluator.meanAveragePrecision(
+		# 	doc_IDs_ordered, query_ids, qrels, 10)
+		# map_at_10.append(MAP)
+		# Plot the metrics and save plot
+		# plt.plot(range(1, 11), precisions, label="Precision")
+		# plt.plot(range(1, 11), recalls, label="Recall")
+		# plt.plot(range(1, 11), fscores, label="F-Score")
+		# plt.plot(range(1, 11), MAPs, label="MAP")
+		# plt.plot(range(1, 11), nDCGs, label="nDCG")
+		# plt.legend()
+		# plt.title("Evaluation Metrics - Cranfield Dataset")
+		# plt.xlabel("k")
+		# print("-"*50)
+		# print("PLOTTING")
+		# print("-"*50)
+		# plt.savefig(args.out_folder + "eval_plot_normal.png")
+		# print('\n')
+		mu, std = norm.fit(dcgs_at_5)
+		mu_lsa, std_lsa = norm.fit(dcgs_at_5_lsa)
+		fig1, ax1 = plt.subplots()
+		ax1.hist(dcgs_at_5, bins=10, histtype='stepfilled', color='royalblue', alpha=0.8, label='VSM', density=True)
+		ax1.hist(dcgs_at_5_lsa, bins=10, histtype='stepfilled', color='lightcoral', alpha=0.8, label='LSA with QE', density=True)
+		xmin, xmax = ax1.get_xlim()
+		x = np.linspace(xmin, xmax, 100)
+		p = norm.pdf(x, mu, std)
+		p_lsa = norm.pdf(x, mu_lsa, std_lsa)
+		ax1.plot(x, p, color='b', linewidth=2)
+		ax1.plot(x, p_lsa, color='r', linewidth=2)
+		ax1.set_xlabel('nDCG @ k=10')
+		ax1.set_ylabel('Number of Queries')
+		ax1.legend()
+		plt.show()
+		# self.plot_histogram(recalls_at_5, recalls_at_5_lsa, 'Recall')
+		# self.plot_histogram(fscore_at_5, fscores_at_5_lsa, 'F-Score')
+		# self.plot_histogram(dcgs_at_5, dcgs_at_5_lsa, 'nDCG')
 		print('Time taken:', end_time - start_time, 'seconds')
-		
+		# fig1, ax1 = plt.subplots()
+		# ax1.plot(ks, fscore_at_5, label="@5")
+		# ax1.plot(ks, fscore_at_10, label="@10")
+		# ax1.legend()
+		# ax1.set_xlabel("Reduced Dimension")
+		# ax1.set_ylabel("F-Score")
+		# ax1.set_title("Evaluation Metrics - Cranfield Dataset")
+		# fig2, ax2 = plt.subplots()
+		# ax2.plot(ks, map_at_5, label="@5")
+		# ax2.plot(ks, map_at_10, label="@10")
+		# ax2.legend()
+		# ax2.set_xlabel("Reduced Dimension")
+		# ax2.set_ylabel("MAP")
+		# ax2.set_title("Evaluation Metrics - Cranfield Dataset")
+		# plt.show()
+
+	def plot_histogram(self, data1, data2, name):
+		mu, std = norm.fit(data1)
+		mu_lsa, std_lsa = norm.fit(data2)
+		fig1, ax1 = plt.subplots()
+		ax1.hist(data1, bins=10, histtype='stepfilled', color='royalblue', alpha=0.8, label='VSM with QE', density=True)
+		ax1.hist(data2, bins=10, histtype='stepfilled', color='lightcoral', alpha=0.8, label='VSM', density=True)
+		xmin, xmax = ax1.get_xlim()
+		x = np.linspace(xmin, xmax, 100)
+		p = norm.pdf(x, mu, std)
+		p_lsa = norm.pdf(x, mu_lsa, std_lsa)
+		ax1.plot(x, p, color='b', linewidth=2)
+		ax1.plot(x, p_lsa, color='r', linewidth=2)
+		ax1.set_xlabel(name + ' @ k=10')
+		ax1.set_ylabel('Number of Queries')
+		ax1.legend()
+		filename_ = name + 'k_10_vsm_vs_vsm_qe.png'
+		fig1.savefig('plots/' + filename_)
+
 	def handleCustomQuery(self):
 		"""
 		Take a custom query as input and return top five relevant documents

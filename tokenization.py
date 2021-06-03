@@ -4,8 +4,9 @@ import re
 from nltk.tokenize import TreebankWordTokenizer
 
 
-
 class Tokenization():
+	def __init__(self):
+		self.punctuations = [',', '.', '(', ')', '?', '!']
 
 	def naive(self, text):
 		"""
@@ -53,7 +54,11 @@ class Tokenization():
 		n = len(text)
 		for i in range(n):
 			tokenizedText[i] = tokenizer.tokenize(text[i])
-
+			temp = []
+			for word in tokenizedText[i]:
+				if word not in self.punctuations:
+					temp.append(word)
+			tokenizedText[i] = temp
 		#Fill in code here
 		
 		return tokenizedText
